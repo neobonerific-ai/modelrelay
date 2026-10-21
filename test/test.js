@@ -26,6 +26,8 @@ import {
   isCompleteSseStream,
   isProviderRequestRejectionError,
   isRateLimitShapedError,
+  isModelScopedError,
+  computeQoSMap,
   isRetryableProxyStatus,
   isErrorShapedFirstSseEvent,
   peekFirstSseEvent,
@@ -48,7 +50,7 @@ import { normalizeMissingScoreId } from '../lib/score-fetcher.js'
 import { buildOpenRouterQualityIndex, fitLinearRegression, qualityLookupKeys, resolveModelQuality } from '../lib/model-quality.js'
 import { getConfiguredTagNames, getModelTagKey, getModelTags as getUserModelTags, normalizeTag, normalizeTags, setModelTags } from '../lib/tags.js'
 import { resolveAutostartExecPath, resolveAutostartNodePath } from '../lib/autostart.js'
-import { normalizeSecret, buildOpenAICompatibleInstanceKey as buildInstanceKeyForSafetyTests, exportConfigToken, getApiKey, getApiKeyPool, getMaxTurns, getPinningMode, getProviderBaseUrl, getProviderModelId, getProviderPingIntervalMs, hasMultipleKeys, importConfigToken, normalizeConfigShape, isOpenAICompatibleInstanceKey, getBaseProviderKey, getOpenAICompatibleInstanceId, buildOpenAICompatibleInstanceKey, listOpenAICompatibleEndpoints, upsertOpenAICompatibleEndpoint, removeOpenAICompatibleEndpoint, isOpencodeFreeTierCompatEnabled, getOpencodeFreeTierUserAgent, DEFAULT_OPENCODE_USER_AGENT } from '../lib/config.js';
+import { normalizeSecret, buildOpenAICompatibleInstanceKey as buildInstanceKeyForSafetyTests, exportConfigToken, getApiKey, getApiKeyPool, getMaxTurns, getPinningMode, getProviderBaseUrl, getProviderModelId, getProviderPingIntervalMs, hasMultipleKeys, importConfigToken, normalizeConfigShape, isOpenAICompatibleInstanceKey, getBaseProviderKey, getOpenAICompatibleInstanceId, buildOpenAICompatibleInstanceKey, listOpenAICompatibleEndpoints, upsertOpenAICompatibleEndpoint, removeOpenAICompatibleEndpoint, isOpencodeFreeTierCompatEnabled, getOpencodeFreeTierUserAgent, getQosUnratedQualityFloor, getMaxProactiveRetries, DEFAULT_OPENCODE_USER_AGENT } from '../lib/config.js';
 import { buildNpmInstallInvocation, buildWindowsPostUpdateRestartCommand, getForcedUpdateVersion, getLocalUpdateTarballPath, getLocalUpdateVersion, isRunningFromSource, shouldStopAutostartBeforeUpdate } from '../lib/update.js'
 import { isKnownProviderKey, captureProxyRateLimit, buildKiroRequestPayload, buildKiroSocialLoginUrl, buildOpencodeHeaders, buildOpencodeProjectId, buildProviderRequestBody, buildProviderRequestHeaders, exchangeKiroSocialAuthFlow, exchangeKiroSocialCode, extractKiroEmailFromAccessToken, extractOllamaModelRecords, extractOpenAICompatibleModelRecords, buildOpenAICompatibleModelsListUrl, getAccountStatus, getKiroRefreshToken, hasKiroAuthConfigured, getPinnedModelCandidate, getPinnedModelMatches, isProviderAuthOptional, isProviderBearerAuthEnabled, parseKiroEventFrame, pollKiroBuilderIdToken, providerWantsBearerAuth, resolveKiroOAuthAccessToken, shouldRetryOptionalProviderWithBearer, startKiroBuilderIdDeviceAuth, startKiroSocialAuthFlow, toOllamaModelMeta, toOpenAICompatibleDiscoveredModelMeta, toOpenCodeModelMeta, toOpenRouterModelMeta, toKiloCodeModelMeta, transformKiroResponse, buildOpencodeFreeTierPayload, stripInjectedToolCalls, stripInjectedToolCallsFromSseChunk, collectOpencodeStreamAsJson, OPENCODE_INJECTED_READ_TOOL, OPENCODE_FREE_COMPAT_WARNING, isOpencodeFreeModelUnsupported, buildPingRequest, buildOpencodeCompatOptions } from '../lib/server.js';
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -926,6 +928,88 @@ describe('provider api key resolution', () => {
     // An explicit value is still normalized to a boolean.
     assert.equal(normalizeConfigShape({ apiKeys: {}, opencodeFreeTierCompat: 'yes' }).opencodeFreeTierCompat, true)
     assert.equal(normalizeConfigShape({ apiKeys: {}, opencodeFreeTierCompat: 'nope' }).opencodeFreeTierCompat, false)
+  })
+
+  it('classifies model-scoped errors so the router moves on to another model', () => {
+    // 404 is always model-scoped: the provider does not have that model.
+    assert.equal(isModelScopedError(404, ''), true)
+    assert.equal(isModelScopedError(404, null), true)
+
+    // A 400 that names a model problem is model-scoped, by error code...
+    assert.equal(isModelScopedError(400, JSON.stringify({ error: { code: 'model_not_found' } })), true)
+    assert.equal(isModelScopedError(400, JSON.stringify({ error: { code: 'context_length_exceeded' } })), true)
+    assert.equal(isModelScopedError(422, JSON.stringify({ error: { type: 'model_not_supported' } })), true)
+    // ...and by the way providers phrase it.
+    assert.equal(isModelScopedError(400, 'The model `foo` does not exist'), true)
+    assert.equal(isModelScopedError(400, "This model's maximum context length is 8192 tokens"), true)
+    assert.equal(isModelScopedError(400, 'tool_choice is not supported by this model'), true)
+
+    // A malformed request fails on every model -- retrying it would only delay the error.
+    assert.equal(isModelScopedError(400, JSON.stringify({ error: { code: 'invalid_request_error', message: 'messages is required' } })), false)
+    assert.equal(isModelScopedError(400, 'invalid api key'), false)
+    assert.equal(isModelScopedError(422, 'unprocessable entity'), false)
+    assert.equal(isModelScopedError(401, 'unauthorized'), false)
+    assert.equal(isModelScopedError(403, 'forbidden'), false)
+    assert.equal(isModelScopedError(500, 'server error'), false)
+  })
+
+  it('ranks a model without benchmark data as unknown instead of as the worst', () => {
+    const rated = { modelId: 'rated', providerKey: 'p', status: 'up', intell: 0.68, avg: 300, pings: [{ ms: 300, code: '200' }] }
+    const unrated = { modelId: 'unrated', providerKey: 'p', status: 'up', intell: 0, avg: 300, pings: [{ ms: 300, code: '200' }] }
+
+    // Without a floor the unrated model loses every comparison on quality alone.
+    const withoutFloor = computeQoSMap([rated, unrated], [], { unratedQualityFloor: 0 })
+    assert.ok(withoutFloor.get(rated) > withoutFloor.get(unrated) * 10)
+
+    // With a floor it competes on speed and uptime instead of being excluded by default.
+    const withFloor = computeQoSMap([rated, unrated], [], { unratedQualityFloor: 35 })
+    assert.ok(withFloor.get(unrated) > 0)
+    assert.ok(withFloor.get(unrated) > withoutFloor.get(unrated))
+
+    // The floor only applies to models that have no score at all.
+    const ratedWithFloor = computeQoSMap([rated], [], { unratedQualityFloor: 35 })
+    const ratedWithoutFloor = computeQoSMap([rated], [], { unratedQualityFloor: 0 })
+    assert.equal(ratedWithFloor.get(rated), ratedWithoutFloor.get(rated))
+  })
+
+  it('keeps the model-scoped failover and the failure reason wired into the request path', () => {
+    // Both live in the request handler, which is only reachable with a running router, so the
+    // wiring is asserted on the source instead of exercised end to end.
+    const source = readFileSync(join(ROOT, 'lib', 'server.js'), 'utf8')
+
+    // A model-scoped error has to reach the retry decision, not just exist as a helper.
+    assert.match(source, /isModelScopedError\(response\.status, rateLimitBodyText\)/)
+    assert.match(source, /\|\| modelScopedError/)
+
+    // The 503 has to name the reason the pool came up empty.
+    assert.match(source, /No models currently available for this request\.\$\{reason\}/)
+    assert.match(source, /last attempt: /)
+  })
+
+  it('keeps the retry budget wired to the config instead of a hardcoded constant', () => {
+    // The unit tests above cover the getter; this one covers the wiring. Without it, the
+    // router could fall back to a fixed budget and every test would still pass while the
+    // config setting silently did nothing.
+    const source = readFileSync(join(ROOT, 'lib', 'server.js'), 'utf8')
+    assert.match(source, /getMaxProactiveRetries\(loadConfig\(\)\)/)
+    // The constant may only survive as the fallback default in config.js, not as the
+    // value the retry loop actually uses.
+    const usesConstant = /MAX_PROACTIVE_RETRIES/.test(source)
+    assert.equal(usesConstant, false)
+  })
+
+  it('reads the retry budget and the quality floor from the config', () => {
+    assert.equal(getMaxProactiveRetries({}), 12)
+    assert.equal(getMaxProactiveRetries({ maxProactiveRetries: 4 }), 4)
+    assert.equal(getMaxProactiveRetries({ maxProactiveRetries: 0 }), 1)
+    assert.equal(getMaxProactiveRetries({ maxProactiveRetries: 999 }), 50)
+    assert.equal(getMaxProactiveRetries({ maxProactiveRetries: 'nonsense' }), 12)
+
+    assert.equal(getQosUnratedQualityFloor({}), 35)
+    assert.equal(getQosUnratedQualityFloor({ qosUnratedQualityFloor: 0 }), 0)
+    assert.equal(getQosUnratedQualityFloor({ qosUnratedQualityFloor: 60 }), 60)
+    assert.equal(getQosUnratedQualityFloor({ qosUnratedQualityFloor: -5 }), 0)
+    assert.equal(getQosUnratedQualityFloor({ qosUnratedQualityFloor: 500 }), 100)
   })
 
   it('rewrites the OpenCode body into the free-tier shape when the compatibility mode is on', () => {
