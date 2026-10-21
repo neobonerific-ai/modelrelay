@@ -79,6 +79,70 @@ If you leave the Ollama base URL blank in the UI, modelrelay defaults to `https:
 With a valid Ollama API key, modelrelay will discover available Ollama models automatically.
 If you point Ollama at a local host such as `http://127.0.0.1:11434`, modelrelay will also auto-discover models and does not require an API key.
 
+## Routing behaviour
+
+These settings decide which model the router picks and how far it goes when a model fails.
+
+### `maxProactiveRetries`
+
+How many alternative models the router may try before it gives up on a request. Every attempt
+is a different model, so this is also the depth of the pool the router can reach when the
+better models are rate-limited at the same time.
+
+```jsonc
+{
+  "maxProactiveRetries": 12
+}
+```
+
+The default is 12. The maximum is 50. A request that runs out of attempts comes back as a
+`503` that names the last model and the reason it failed.
+
+### `qosUnratedQualityFloor`
+
+The quality percentile (0-100) assumed for a model that has no benchmark score. Without it, an
+unrated model scores a percentile of 0 and is ranked behind every rated model, however fast it
+is. With it, an unrated model is ranked as *unknown* and still has to beat the rated models on
+speed and uptime.
+
+```jsonc
+{
+  "qosUnratedQualityFloor": 35
+}
+```
+
+The default is 35. Set it to 0 to rank unrated models last, as upstream does.
+
+### `qosLatencyTargetMs`
+
+The latency in milliseconds the QoS score treats as "fast enough". A model slower than this
+loses score, a faster one does not gain any -- so a higher target weights intelligence over
+latency more strongly.
+
+```jsonc
+{
+  "qosLatencyTargetMs": 8000
+}
+```
+
+The default is 3000.
+
+### Which failures move on to the next model
+
+| Response | Behaviour |
+|---|---|
+| `429`, `410`, `5xx` | the router tries the next model |
+| `404` | the router tries the next model -- the provider does not have that model |
+| `400` / `422` naming a model problem | the router tries the next model |
+| `400` / `422` for a malformed request | returned to the caller unchanged |
+| `401` | returned to the caller unchanged |
+
+"Model problem" is either an OpenAI-style error code (`model_not_found`,
+`context_length_exceeded`, `max_tokens_exceeded`, `unsupported_parameter`, ...) or the way
+providers phrase it ("the model ... does not exist", "maximum context length", "not supported by
+this model"). A malformed request still fails fast, because it would fail on every model and
+retrying it would only delay the error the caller needs to see.
+
 ## OpenAI-Compatible endpoints
 
 modelrelay supports configuring multiple OpenAI-compatible upstream endpoints (vLLM, llama.cpp, custom relays, etc.). Each endpoint exposes a single model id and is routed independently.
