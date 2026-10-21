@@ -930,6 +930,20 @@ describe('provider api key resolution', () => {
     assert.equal(normalizeConfigShape({ apiKeys: {}, opencodeFreeTierCompat: 'nope' }).opencodeFreeTierCompat, false)
   })
 
+  it('retries the transient request states as well as the rate limit', () => {
+    assert.equal(isRetryableProxyStatus(429), true)
+    assert.equal(isRetryableProxyStatus(410), true)
+    assert.equal(isRetryableProxyStatus(408), true)
+    assert.equal(isRetryableProxyStatus(421), true)
+    assert.equal(isRetryableProxyStatus(425), true)
+    assert.equal(isRetryableProxyStatus(500), true)
+    assert.equal(isRetryableProxyStatus(503), true)
+    // A client error that is not transient is not retried.
+    assert.equal(isRetryableProxyStatus(400), false)
+    assert.equal(isRetryableProxyStatus(401), false)
+    assert.equal(isRetryableProxyStatus(404), false)
+  })
+
   it('classifies model-scoped errors so the router moves on to another model', () => {
     // 404 is always model-scoped: the provider does not have that model.
     assert.equal(isModelScopedError(404, ''), true)
@@ -944,12 +958,22 @@ describe('provider api key resolution', () => {
     assert.equal(isModelScopedError(400, "This model's maximum context length is 8192 tokens"), true)
     assert.equal(isModelScopedError(400, 'tool_choice is not supported by this model'), true)
 
+    // 413: the request does not fit the model's limit. Another model with a bigger window
+    // can serve it, so the router moves on. Seen live: "Request too large for model ...".
+    assert.equal(isModelScopedError(413, ''), true)
+    assert.equal(isModelScopedError(413, 'Request too large for model `qwen/qwen3.8-27b`'), true)
+
+    // A 403 that names the model is about the model, not about the account.
+    assert.equal(isModelScopedError(403, 'You do not have access to this model'), true)
+    assert.equal(isModelScopedError(403, 'model `x` not available for your tier'), true)
+
     // A malformed request fails on every model -- retrying it would only delay the error.
     assert.equal(isModelScopedError(400, JSON.stringify({ error: { code: 'invalid_request_error', message: 'messages is required' } })), false)
     assert.equal(isModelScopedError(400, 'invalid api key'), false)
     assert.equal(isModelScopedError(422, 'unprocessable entity'), false)
     assert.equal(isModelScopedError(401, 'unauthorized'), false)
     assert.equal(isModelScopedError(403, 'forbidden'), false)
+    assert.equal(isModelScopedError(403, 'invalid api key'), false)
     assert.equal(isModelScopedError(500, 'server error'), false)
   })
 

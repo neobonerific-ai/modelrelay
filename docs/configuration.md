@@ -133,9 +133,12 @@ The default is 3000.
 |---|---|
 | `429`, `410`, `5xx` | the router tries the next model |
 | `404` | the router tries the next model -- the provider does not have that model |
+| `413` | the router tries the next model -- the request does not fit that model's limit |
 | `400` / `422` naming a model problem | the router tries the next model |
+| `403` naming the model | the router tries the next model -- the model is not available to you |
 | `400` / `422` for a malformed request | returned to the caller unchanged |
 | `401` | returned to the caller unchanged |
+| `408`, `421`, `425` | the router tries the next model -- the request state is transient |
 
 "Model problem" is either an OpenAI-style error code (`model_not_found`,
 `context_length_exceeded`, `max_tokens_exceeded`, `unsupported_parameter`, ...) or the way
