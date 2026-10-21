@@ -44,26 +44,26 @@ Kiro OAuth notes:
 ## OpenCode Zen free-tier compatibility
 
 OpenCode's free models only answer requests that carry the request shape of the official OpenCode
-client. By default modelrelay does not imitate that client, so those models are listed as
-`unsupported` and are not routed to. The reasoning and the measured gate conditions are in
+client. **This fork imitates that client by default**, so the free models are routed to out of the
+box. The reasoning and the measured gate conditions are in
 [Free tier notes](free-tiers.md).
 
-Set `opencodeFreeTierCompat` in `~/.modelrelay.json` to enable the mode:
+To turn the mode off, set `opencodeFreeTierCompat` in `~/.modelrelay.json`:
 
 ```jsonc
 {
-  "opencodeFreeTierCompat": true
+  "opencodeFreeTierCompat": false
 }
 ```
 
 Or set the environment variable, which takes precedence over the config file:
 
 ```bash
-export MODELRELAY_OPENCODE_FREE_COMPAT=1
+export MODELRELAY_OPENCODE_FREE_COMPAT=0
 ```
 
-Only `1`, `true`, `yes` and `on` enable it; anything else leaves it off, so a typo cannot silently
-start rewriting requests.
+Only `1`, `true`, `yes` and `on` enable it, and only `0`, `false`, `no` and `off` turn it off. An
+unset value means the default of this fork, which is on.
 
 The mode sends a User-Agent of `opencode/1.19.3`. To use a different one — for example when that
 version goes stale — set `opencodeFreeTierUserAgent` in the config file or
@@ -71,7 +71,8 @@ version goes stale — set `opencodeFreeTierUserAgent` in the config file or
 
 **The mode imitates the official OpenCode client, which may conflict with OpenCode's terms of
 service, and it can stop working at any time.** modelrelay prints a warning at startup and shows
-one in the dashboard while the mode is on. Enabling it is your decision and your responsibility.
+one in the dashboard while the mode is on — which is the default in this fork. Using it is your
+decision and your responsibility.
 
 For hosted Ollama, set `OLLAMA_API_KEY` and optionally override `OLLAMA_BASE_URL` / `OLLAMA_MODEL`.
 If you leave the Ollama base URL blank in the UI, modelrelay defaults to `https://ollama.com/v1`.

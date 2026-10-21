@@ -12,7 +12,7 @@ What free tiers do in practice, measured against real providers in October 2026.
 | Provider | What we saw |
 |---|---|
 | OpenRouter | Free models are limited to 20 requests per minute, and 50 per day on a key with no credits. A one-time purchase of $10 or more in credits raises the daily limit to 1,000. A key limit of $0 still allows `:free` models. |
-| OpenCode Zen | The free models answer `403 FreeTierError` ("the free tier can only be used from within OpenCode") for any other client. By default modelrelay does not imitate the OpenCode client, so these models are listed as `unsupported` and are not routed to. See [OpenCode Zen free models](#opencode-zen-free-models). |
+| OpenCode Zen | The free models answer `403 FreeTierError` ("the free tier can only be used from within OpenCode") for any other client. This fork imitates the OpenCode client by default, so these models are routed to out of the box. See [OpenCode Zen free models](#opencode-zen-free-models). |
 | Ollama Cloud | The free plan answers `402` for the premium models. |
 | Cerebras | Answers `402` for models outside the free allowance. |
 | Google AI | Free quotas are very small, or zero for some models. |
@@ -27,28 +27,32 @@ OpenCode's free models are not restricted by account or entitlement. They are re
 OpenCode client. A request that does not is refused with `403 FreeTierError` and the message
 "OpenCode's free tier can only be used from within OpenCode".
 
-**By default modelrelay respects that restriction.** The free models appear in the model list with
-status `unsupported` and are never routed to. A `403` from OpenCode describes the request, not a
-retired model, so it is not a "try another model" signal either — the model is alive, the request
-is not what it wants.
+**This fork enables the compatibility mode by default.** The free models are routed to out of the
+box. Upstream modelrelay ships with the mode off and lists the free models with status
+`unsupported`; this fork turns it on so the free models work without any setup.
 
-### Opt-in compatibility mode
+A `403` from OpenCode describes the request, not a retired model, so it is not a "try another
+model" signal either — the model is alive, the request is not what it wants. That is why the mode
+exists at all.
 
-If you want the free models anyway, you can turn on the compatibility mode. It makes modelrelay
-imitate the official OpenCode client: it sends a matching User-Agent, a session id in the format
-the endpoint expects, `stream: true`, and a tool named exactly `read`.
+### The compatibility mode
 
-Set `opencodeFreeTierCompat` in `~/.modelrelay.json`, or the `MODELRELAY_OPENCODE_FREE_COMPAT=1`
-environment variable. The environment variable wins over the config file. See
-[Configuration](configuration.md) for details.
+The compatibility mode makes modelrelay imitate the official OpenCode client: it sends a matching
+User-Agent, a session id in the format the endpoint expects, `stream: true`, and a tool named
+exactly `read`.
 
-**Read this before you enable it.** The mode:
+Set `opencodeFreeTierCompat: false` in `~/.modelrelay.json`, or the
+`MODELRELAY_OPENCODE_FREE_COMPAT=0` environment variable, to turn it off. The environment variable
+wins over the config file. See [Configuration](configuration.md) for details.
+
+**The mode is on by default here, so read this.** The mode:
 
 - imitates the official OpenCode client, which may conflict with OpenCode's terms of service;
 - can stop working at any time, without a notice from OpenCode;
 - means that you are responsible for using it.
 
-modelrelay prints a warning at startup and shows one in the dashboard for as long as the mode is on.
+modelrelay prints a warning at startup and shows one in the dashboard for as long as the mode is on —
+which, in this fork, is the default.
 
 ### What the endpoint checks
 

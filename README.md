@@ -20,6 +20,19 @@
 
 ---
 
+> **This is a fork.** It is based on [gschaetz/modelrelay](https://github.com/gschaetz/modelrelay) and
+> differs from it in one thing: **the OpenCode Zen free models work out of the box.** Upstream ships
+> that mode off, because it makes modelrelay imitate the official OpenCode client — which may
+> conflict with OpenCode's terms of service. This fork turns it on by default, so the free models
+> are routed to without any setup.
+>
+> Turn it off with `opencodeFreeTierCompat: false` in `~/.modelrelay.json`, or
+> `MODELRELAY_OPENCODE_FREE_COMPAT=0`. The reasoning and the measured gate conditions are in
+> [docs/free-tiers.md](docs/free-tiers.md).
+>
+> The upstream-compatible, opt-in version is kept in the branch `feat/opencode-free-tier-compat`
+> and upstream pull request [#12](https://github.com/gschaetz/modelrelay/pull/12).
+
 ### 🔥 100% Free • Auto-Routing • 80+ Models • 12+ Providers • OpenAI-Compatible
 
 **modelrelay** is an OpenAI-compatible local router that benchmarks free coding models across top providers and automatically forwards your requests to the best available model. 

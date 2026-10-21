@@ -828,9 +828,13 @@ describe('provider api key resolution', () => {
   })
 
   it('reads the OpenCode free-tier compatibility flag from the config and the env var', () => {
-    assert.equal(isOpencodeFreeTierCompatEnabled({}), false)
-    assert.equal(isOpencodeFreeTierCompatEnabled({ opencodeFreeTierCompat: false }), false)
+    // This fork ships with the mode on by default.
+    assert.equal(isOpencodeFreeTierCompatEnabled({}), true)
     assert.equal(isOpencodeFreeTierCompatEnabled({ opencodeFreeTierCompat: true }), true)
+    // An explicit false still turns it off.
+    assert.equal(isOpencodeFreeTierCompatEnabled({ opencodeFreeTierCompat: false }), false)
+    assert.equal(isOpencodeFreeTierCompatEnabled({ opencodeFreeTierCompat: '0' }), false)
+    assert.equal(isOpencodeFreeTierCompatEnabled({ opencodeFreeTierCompat: 'off' }), false)
     assert.equal(isOpencodeFreeTierCompatEnabled({ opencodeFreeTierCompat: '1' }), true)
     // A typo must not silently enable the request rewriting.
     assert.equal(isOpencodeFreeTierCompatEnabled({ opencodeFreeTierCompat: 'yes please' }), false)
@@ -857,8 +861,15 @@ describe('provider api key resolution', () => {
   })
 
   it('sends the OpenCode free-tier headers only when the compatibility mode is on', () => {
+    // This fork ships with the mode on by default.
+    const defaultOptions = buildOpencodeCompatOptions('opencode', {})
+    assert.equal(defaultOptions.freeTierCompat, true)
+    const byDefault = buildProviderRequestHeaders('opencode', defaultOptions)
+    assert.equal(byDefault['User-Agent'], DEFAULT_OPENCODE_USER_AGENT)
+    assert.match(byDefault['x-opencode-session'], /^ses_[0-9a-f]{12}[0-9A-Za-z]{14}$/)
+
     // Off: no User-Agent and the old session id format.
-    const offOptions = buildOpencodeCompatOptions('opencode', {})
+    const offOptions = buildOpencodeCompatOptions('opencode', { opencodeFreeTierCompat: false })
     assert.equal(offOptions.freeTierCompat, false)
     const off = buildProviderRequestHeaders('opencode', offOptions)
     assert.equal(off['User-Agent'], undefined)
@@ -881,6 +892,40 @@ describe('provider api key resolution', () => {
     // Another provider is unaffected.
     const other = buildOpencodeCompatOptions('nvidia', { opencodeFreeTierCompat: true })
     assert.equal(other.freeTierCompat, false)
+  })
+
+  it('enables the OpenCode free-tier mode by default in this fork, and lets it be turned off', () => {
+    // Unset -> the fork default, which is on.
+    assert.equal(isOpencodeFreeTierCompatEnabled({}), true)
+    assert.equal(isOpencodeFreeTierCompatEnabled(undefined), true)
+
+    // An explicit value always wins over the default.
+    assert.equal(isOpencodeFreeTierCompatEnabled({ opencodeFreeTierCompat: true }), true)
+    assert.equal(isOpencodeFreeTierCompatEnabled({ opencodeFreeTierCompat: false }), false)
+    assert.equal(isOpencodeFreeTierCompatEnabled({ opencodeFreeTierCompat: '0' }), false)
+    assert.equal(isOpencodeFreeTierCompatEnabled({ opencodeFreeTierCompat: 'off' }), false)
+    assert.equal(isOpencodeFreeTierCompatEnabled({ opencodeFreeTierCompat: 'no' }), false)
+    assert.equal(isOpencodeFreeTierCompatEnabled({ opencodeFreeTierCompat: '1' }), true)
+    assert.equal(isOpencodeFreeTierCompatEnabled({ opencodeFreeTierCompat: 'yes' }), true)
+
+    // The env var wins over the config, in both directions.
+    process.env.MODELRELAY_OPENCODE_FREE_COMPAT = '0'
+    assert.equal(isOpencodeFreeTierCompatEnabled({}), false)
+    assert.equal(isOpencodeFreeTierCompatEnabled({ opencodeFreeTierCompat: true }), false)
+    process.env.MODELRELAY_OPENCODE_FREE_COMPAT = '1'
+    assert.equal(isOpencodeFreeTierCompatEnabled({ opencodeFreeTierCompat: false }), true)
+    delete process.env.MODELRELAY_OPENCODE_FREE_COMPAT
+  })
+
+  it('keeps an unset compatibility flag unset when the config is normalized', () => {
+    // The default must survive a config round trip, so normalization may not
+    // turn "unset" into an explicit false.
+    const normalized = normalizeConfigShape({ apiKeys: {} })
+    assert.equal(normalized.opencodeFreeTierCompat, undefined)
+
+    // An explicit value is still normalized to a boolean.
+    assert.equal(normalizeConfigShape({ apiKeys: {}, opencodeFreeTierCompat: 'yes' }).opencodeFreeTierCompat, true)
+    assert.equal(normalizeConfigShape({ apiKeys: {}, opencodeFreeTierCompat: 'nope' }).opencodeFreeTierCompat, false)
   })
 
   it('rewrites the OpenCode body into the free-tier shape when the compatibility mode is on', () => {
@@ -944,11 +989,15 @@ describe('provider api key resolution', () => {
     assert.equal(isModelEligibleForRouting({ status: 'unsupported' }), false)
     assert.equal(isModelEligibleForRouting({ status: 'down' }), true)
 
-    // The free models of the OpenCode provider are the affected ones.
-    assert.equal(isOpencodeFreeModelUnsupported('opencode', 'nemotron-3.5-super-vl-free', {}), true)
-    assert.equal(isOpencodeFreeModelUnsupported('opencode', 'beam-free', {}), true)
-    // With the compatibility mode on, they are usable again.
+    // The free models of the OpenCode provider are the affected ones. With the
+    // compatibility mode off they are not usable, but they are not broken
+    // either, so they must not be routed to.
+    assert.equal(isOpencodeFreeModelUnsupported('opencode', 'nemotron-3.5-super-vl-free', { opencodeFreeTierCompat: false }), true)
+    assert.equal(isOpencodeFreeModelUnsupported('opencode', 'beam-free', { opencodeFreeTierCompat: false }), true)
+    // With the compatibility mode on they are usable. This fork has it on by
+    // default, so an unset config is enough.
     assert.equal(isOpencodeFreeModelUnsupported('opencode', 'nemotron-3.5-super-vl-free', { opencodeFreeTierCompat: true }), false)
+    assert.equal(isOpencodeFreeModelUnsupported('opencode', 'nemotron-3.5-super-vl-free', {}), false)
     // Other providers and other models are unaffected.
     assert.equal(isOpencodeFreeModelUnsupported('nvidia', 'nemotron-3.5-super-vl-free', {}), false)
     assert.equal(isOpencodeFreeModelUnsupported('opencode', 'some-paid-model', {}), false)
